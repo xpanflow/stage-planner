@@ -46,7 +46,7 @@ const State = (() => {
       stageDimensions: { width: 10, depth: 6 },
       backgroundImage: null,
       performers: [],
-      scenes: [{ id: uid(), name: 'Scene 1', positions: {} }],
+      scenes: [{ id: uid(), name: 'Scene 1', positions: {}, note: '' }],
       currentSceneIndex: 0,
       settings: {
         gridVisible:    true,
@@ -660,6 +660,7 @@ const SceneManager = (() => {
       id: uid(),
       name: `Scene ${p.scenes.length + 1}`,
       positions: JSON.parse(JSON.stringify(cur.positions)),
+      note: '',
     });
     p.currentSceneIndex = p.scenes.length - 1;
     Persistence.save();
@@ -671,7 +672,7 @@ const SceneManager = (() => {
     const p   = State.p;
     State.pushUndo();
     const cur = p.scenes[p.currentSceneIndex];
-    const dup = { id: uid(), name: cur.name + ' (copy)', positions: JSON.parse(JSON.stringify(cur.positions)) };
+    const dup = { id: uid(), name: cur.name + ' (copy)', positions: JSON.parse(JSON.stringify(cur.positions)), note: cur.note ?? '' };
     const idx = p.currentSceneIndex + 1;
     p.scenes.splice(idx, 0, dup);
     p.currentSceneIndex = idx;
@@ -1001,6 +1002,9 @@ const ProjectIO = (() => {
       parsed.backgroundImage = null;    // never imported
       parsed.currentSceneIndex = clamp(parsed.currentSceneIndex ?? 0, 0, parsed.scenes.length - 1);
 
+      // Ensure every scene has a note field
+      for (const s of parsed.scenes) { if (s.note == null) s.note = ''; }
+
       // Ensure every performer has widthM/heightM
       for (const pf of parsed.performers) {
         const ti  = TYPES[pf.type] || TYPES.child;
@@ -1241,6 +1245,13 @@ const UI = (() => {
       if (v > 0) { State.p.settings.animDurationMs = v * 1000; Persistence.save(); }
     });
 
+    /* scene note — save on every keystroke (debounced via Persistence) */
+    _on('scene-note', 'input', e => {
+      const p = State.p;
+      const scene = p.scenes[p.currentSceneIndex];
+      if (scene) { scene.note = e.target.value; Persistence.save(); }
+    });
+
     /* selected performer fields */
     _on('sel-name', 'change', e => {
       if (!_selId) return;
@@ -1462,11 +1473,20 @@ const UI = (() => {
     document.getElementById('sel-y').value = pos.y.toFixed(2);
   }
 
+  function syncSceneNote() {
+    const p     = State.p;
+    const scene = p.scenes[p.currentSceneIndex];
+    if (!scene) return;
+    document.getElementById('scene-note').value         = scene.note ?? '';
+    document.getElementById('notes-scene-label').textContent = scene.name;
+  }
+
   function syncAll() {
     syncSceneSelect();
     syncPerformerList();
     _syncSelectedSection();
     _syncStageInputs();
+    syncSceneNote();
     _syncToggle('btn-grid',    State.p.settings.gridVisible);
     _syncToggle('btn-snap',    State.p.settings.snapToGrid);
     _syncToggle('btn-measure', MeasureTool.active);
@@ -1511,13 +1531,64 @@ const UI = (() => {
 
   return {
     init,
-    syncAll, syncSceneSelect, syncPerformerList, syncZoomLabel, syncSelectedPos,
+    syncAll, syncSceneSelect, syncPerformerList, syncSceneNote, syncZoomLabel, syncSelectedPos,
     selectPerformer,
     get selectedId() { return _selId; },
   };
 })();
 
 /* ============================================================
+   NOTES PANEL  — resize + collapse
+============================================================ */
+const NotesPanel = (() => {
+  const MIN_H    = 32;   // header-only (collapsed)
+  const DEFAULT_H = 120;
+  let _panel, _handle, _collapsed = false;
+  let _dragStartY = 0, _dragStartH = 0;
+
+  function init() {
+    _panel  = document.getElementById('notes-panel');
+    _handle = document.getElementById('notes-resize-handle');
+
+    /* drag-to-resize */
+    _handle.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      _dragStartY = e.clientY;
+      _dragStartH = _panel.offsetHeight;
+      _handle.setPointerCapture(e.pointerId);
+    });
+    _handle.addEventListener('pointermove', e => {
+      if (!e.buttons) return;
+      const delta  = _dragStartY - e.clientY;   // drag up = grow
+      const newH   = clamp(_dragStartH + delta, MIN_H, window.innerHeight * 0.55);
+      _panel.style.height = newH + 'px';
+      if (newH <= MIN_H + 4) _setCollapsed(true);
+      else _setCollapsed(false);
+    });
+
+    /* toggle button */
+    document.getElementById('btn-notes-toggle').addEventListener('click', () => {
+      if (_collapsed) {
+        _setCollapsed(false);
+        _panel.style.height = DEFAULT_H + 'px';
+      } else {
+        _setCollapsed(true);
+      }
+    });
+  }
+
+  function _setCollapsed(yes) {
+    _collapsed = yes;
+    _panel.classList.toggle('collapsed', yes);
+  }
+
+  return { init };
+})();
+
+/* ============================================================
    BOOTSTRAP
 ============================================================ */
-document.addEventListener('DOMContentLoaded', () => UI.init());
+document.addEventListener('DOMContentLoaded', () => {
+  UI.init();
+  NotesPanel.init();
+});

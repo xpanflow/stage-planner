@@ -99,8 +99,9 @@
         </div>
       </aside>
 
-      <!-- STAGE AREA -->
-      <main id="stage-area">
+      <!-- CENTER COLUMN: stage + notes only -->
+      <div id="center-col">
+        <main id="stage-area">
         <div id="stage-container">
           <svg id="stage-svg" xmlns="http://www.w3.org/2000/svg">
             <defs>
@@ -130,7 +131,21 @@
           </svg>
         </div>
         <div id="stage-coords">x: 0.0 m   y: 0.0 m</div>
-      </main>
+        </main>
+
+        <!-- NOTES PANEL -->
+        <div id="notes-panel">
+          <div id="notes-resize-handle" title="Drag to resize"></div>
+          <div id="notes-header">
+            <span id="notes-icon">📝</span>
+            <span id="notes-scene-label">Scene 1</span>
+            <span id="notes-label">· Notes</span>
+            <button id="btn-notes-toggle" title="Collapse / Expand notes">▾</button>
+          </div>
+          <textarea id="scene-note" placeholder="Click here to add notes for this scene…" spellcheck="true"></textarea>
+        </div>
+
+      </div><!-- /#center-col -->
 
       <!-- RIGHT SIDEBAR -->
       <aside id="right-sidebar">
@@ -216,8 +231,9 @@
         </div>
 
       </aside>
-    </div>
-  </div>
+
+    </div><!-- /#main-body -->
+  </div><!-- /#app -->
 
   <!-- ═══ ADD PERFORMER MODAL ═══ -->
   <div id="modal-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">

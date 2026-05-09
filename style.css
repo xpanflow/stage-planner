@@ -332,11 +332,23 @@ aside {
 }
 
 /* ═══════════════════════════════════════════
+   CENTER COLUMN  (stage + notes, between sidebars)
+═══════════════════════════════════════════ */
+#center-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════
    STAGE AREA
 ═══════════════════════════════════════════ */
 #stage-area {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -414,6 +426,92 @@ aside {
   color: var(--text2);
   line-height: 1.5;
 }
+
+/* ═══ NOTES PANEL (PowerPoint-style bottom bar) ═══ */
+#notes-panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: 120px;
+  min-height: 32px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border2);
+  position: relative;
+  overflow: hidden;
+}
+
+#notes-panel.collapsed {
+  height: 32px !important;
+}
+#notes-panel.collapsed #scene-note { display: none; }
+#notes-panel.collapsed #btn-notes-toggle { transform: rotate(-90deg); }
+
+#notes-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  cursor: ns-resize;
+  z-index: 10;
+  background: transparent;
+}
+#notes-resize-handle:hover { background: var(--accent); opacity: 0.4; }
+
+#notes-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 32px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+#notes-icon { font-size: 13px; }
+
+#notes-scene-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#notes-label {
+  font-size: 11px;
+  color: var(--text3);
+}
+
+#btn-notes-toggle {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text2);
+  padding: 2px 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+#btn-notes-toggle:hover { color: var(--text); background: transparent; }
+
+#scene-note {
+  flex: 1;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.6;
+  padding: 8px 16px;
+  resize: none;
+  outline: none;
+}
+#scene-note::placeholder { color: var(--text3); font-style: italic; }
 
 /* ═══════════════════════════════════════════
    MODAL

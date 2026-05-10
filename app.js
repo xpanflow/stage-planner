@@ -21,6 +21,7 @@ function makeSVGEl(tag, attrs = {}, text) {
 const STORAGE_KEY = 'stageFormation_v1';
 
 /* ─── Recompute every scene's startTime from its animDurationMs chain ─── */
+/* (Legacy helper; startTime is now the primary field, but kept for addScene.) */
 function recomputeStartTimes() {
   const p = State.p;
   let t = 0;
@@ -28,6 +29,12 @@ function recomputeStartTimes() {
     s.startTime = t;
     t += (s.animDurationMs ?? p.settings.animDurationMs) / 1000;
   }
+}
+
+/* ─── Walk (animation) duration for scene[idx] ─── */
+function sceneAnimDurMs(idx) {
+  const p = State.p;
+  return p.scenes[idx]?.animDurationMs ?? p.settings.animDurationMs;
 }
 const PADDING     = 48;   // px around stage at zoom=1
 
@@ -411,7 +418,7 @@ const Animator = (() => {
     if (_startTime === null) _startTime = ts;
     const p       = State.p;
     const elapsed  = ts - _startTime;
-    const durMs    = p.scenes[p.currentSceneIndex]?.animDurationMs ?? p.settings.animDurationMs;
+    const durMs    = sceneAnimDurMs(p.currentSceneIndex);
     const t        = easeInOut(Math.min(elapsed / durMs, 1));
 
     for (const perf of p.performers) {
@@ -666,16 +673,16 @@ const SceneManager = (() => {
   function addScene() {
     const p    = State.p;
     State.pushUndo();
-    const last = p.scenes[p.scenes.length - 1];
-    const newStartTime  = last.startTime + last.animDurationMs / 1000;
-    const newAnimDurMs  = last.animDurationMs ?? p.settings.animDurationMs;
+    const last         = p.scenes[p.scenes.length - 1];
+    const defaultSlot  = p.settings.animDurationMs / 1000;
+    const newStartTime = last.startTime + defaultSlot;
     p.scenes.push({
       id: uid(),
       name: `Scene ${p.scenes.length + 1}`,
       positions: JSON.parse(JSON.stringify(p.scenes[p.currentSceneIndex].positions)),
       note: '',
       startTime: newStartTime,
-      animDurationMs: newAnimDurMs,
+      animDurationMs: p.settings.animDurationMs,
     });
     p.currentSceneIndex = p.scenes.length - 1;
     Persistence.save();
@@ -688,17 +695,20 @@ const SceneManager = (() => {
     const p   = State.p;
     State.pushUndo();
     const cur = p.scenes[p.currentSceneIndex];
+    const nextIdx  = p.currentSceneIndex + 1;
+    const nextStart = nextIdx < p.scenes.length
+      ? p.scenes[nextIdx].startTime
+      : cur.startTime + p.settings.animDurationMs / 1000;
+    const dupStart = (cur.startTime + nextStart) / 2; // midpoint
     const dup = {
       id: uid(), name: cur.name + ' (copy)',
       positions: JSON.parse(JSON.stringify(cur.positions)),
       note: cur.note ?? '',
-      startTime: 0,
-      animDurationMs: cur.animDurationMs ?? p.settings.animDurationMs,
+      startTime: dupStart,
+      animDurationMs: p.settings.animDurationMs,
     };
-    const idx = p.currentSceneIndex + 1;
-    p.scenes.splice(idx, 0, dup);
-    p.currentSceneIndex = idx;
-    recomputeStartTimes();
+    p.scenes.splice(nextIdx, 0, dup);
+    p.currentSceneIndex = nextIdx;
     Persistence.save();
     UI.syncAll();
     Renderer.render();
@@ -1301,7 +1311,7 @@ const UI = (() => {
       Persistence.save();
     });
 
-    _on('anim-duration', 'change', e => {
+    _on('scene-walk-dur', 'change', e => {
       const v = parseFloat(e.target.value);
       if (v > 0) {
         const p     = State.p;
@@ -1310,12 +1320,12 @@ const UI = (() => {
           State.pushUndo();
           scene.animDurationMs      = v * 1000;
           p.settings.animDurationMs = v * 1000; // keep global default in sync
-          recomputeStartTimes();
           Persistence.save();
           MusicPlayer.renderTimeline();
         }
       }
     });
+
     _on('scene-start-time', 'change', e => {
       const v = parseFloat(e.target.value);
       if (isNaN(v) || v < 0) return;
@@ -1323,13 +1333,10 @@ const UI = (() => {
       const idx   = p.currentSceneIndex;
       const scene = p.scenes[idx];
       if (!scene || idx === 0) return; // Scene 1 always at 0
+      // Clamp: must be > previous scene's startTime
+      const minT = p.scenes[idx - 1]?.startTime ?? 0;
+      scene.startTime = Math.max(minT + 0.1, v);
       State.pushUndo();
-      scene.startTime = v;
-      // Recompute animDurationMs of previous scene to match
-      if (idx > 0) {
-        const prev = p.scenes[idx - 1];
-        prev.animDurationMs = Math.max(0.1, (v - prev.startTime)) * 1000;
-      }
       Persistence.save();
       _syncStageInputs();
       MusicPlayer.renderTimeline();
@@ -1604,13 +1611,16 @@ const UI = (() => {
     const p     = State.p;
     const idx   = p.currentSceneIndex;
     const scene = p.scenes[idx];
-    document.getElementById('stage-width').value   = p.stageDimensions.width;
-    document.getElementById('stage-depth').value   = p.stageDimensions.depth;
-    document.getElementById('anim-duration').value = ((scene?.animDurationMs ?? p.settings.animDurationMs) / 1000).toFixed(1);
+    document.getElementById('stage-width').value = p.stageDimensions.width;
+    document.getElementById('stage-depth').value = p.stageDimensions.depth;
+
     const stEl = document.getElementById('scene-start-time');
     stEl.value    = (scene?.startTime ?? 0).toFixed(1);
-    stEl.disabled = (idx === 0); // Scene 1 always starts at 0
-    stEl.title    = idx === 0 ? 'Scene 1 always starts at 0' : 'When this scene\'s transition starts (seconds)';
+    stEl.disabled = (idx === 0);
+    stEl.title    = idx === 0 ? 'Scene 1 always starts at 0' : 'Music time when walking starts (seconds)';
+
+    const walkEl = document.getElementById('scene-walk-dur');
+    if (walkEl) walkEl.value = (sceneAnimDurMs(idx) / 1000).toFixed(1);
   }
 
   function _syncToggle(id, active) {
@@ -1805,11 +1815,8 @@ const MusicPlayer = (() => {
       State.pushUndo();
       const slot = dur / p.scenes.length;
       p.scenes.forEach((s, i) => {
-        s.startTime    = i * slot;
-        s.animDurationMs = Math.round(Math.min(slot, s.animDurationMs ?? p.settings.animDurationMs) * 10) / 10 * 1000;
+        s.startTime = i * slot;  // startTime is the primary field
       });
-      // Normalize so startTime chain is consistent
-      recomputeStartTimes();
       Persistence.save();
       UI.syncAll();
     }
@@ -1888,7 +1895,7 @@ const MusicPlayer = (() => {
     // Calculate how far into this scene's transition we are
     const scene    = scenes[idx];
     const offset   = t - scene.startTime;          // seconds since scene[idx] started
-    const animSec  = (scene.animDurationMs ?? p.settings.animDurationMs) / 1000;
+    const animSec  = sceneAnimDurMs(idx) / 1000;
 
     if (idx > 0 && offset < animSec) {
       // --- In-transition: lerp from scene[idx-1] to scene[idx] ---

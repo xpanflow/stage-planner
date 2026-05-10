@@ -20,17 +20,6 @@ function makeSVGEl(tag, attrs = {}, text) {
 ============================================================ */
 const STORAGE_KEY = 'stageFormation_v1';
 
-/* ─── Recompute every scene's startTime from its animDurationMs chain ─── */
-/* (Legacy helper; startTime is now the primary field, but kept for addScene.) */
-function recomputeStartTimes() {
-  const p = State.p;
-  let t = 0;
-  for (const s of p.scenes) {
-    s.startTime = t;
-    t += (s.animDurationMs ?? p.settings.animDurationMs) / 1000;
-  }
-}
-
 /* ─── Walk (animation) duration for scene[idx] ─── */
 function sceneAnimDurMs(idx) {
   const p = State.p;
@@ -674,8 +663,10 @@ const SceneManager = (() => {
     const p    = State.p;
     State.pushUndo();
     const last         = p.scenes[p.scenes.length - 1];
-    const defaultSlot  = p.settings.animDurationMs / 1000;
-    const newStartTime = last.startTime + defaultSlot;
+    // Append after the last scene's walk completes — otherwise the new
+    // scene's startTime can fall inside the previous transition window.
+    const lastWalkSec  = (last.animDurationMs ?? p.settings.animDurationMs) / 1000;
+    const newStartTime = last.startTime + lastWalkSec;
     p.scenes.push({
       id: uid(),
       name: `Scene ${p.scenes.length + 1}`,
@@ -721,7 +712,10 @@ const SceneManager = (() => {
     State.pushUndo();
     p.scenes.splice(p.currentSceneIndex, 1);
     p.currentSceneIndex = clamp(p.currentSceneIndex, 0, p.scenes.length - 1);
-    recomputeStartTimes();
+    // Preserve every remaining scene's startTime — the user may have aligned
+    // them to specific music beats. Only enforce the invariant that the first
+    // scene starts at 0.
+    p.scenes[0].startTime = 0;
     Persistence.save();
     UI.syncAll();
     Renderer.render();
@@ -1236,6 +1230,7 @@ const UI = (() => {
         'Tip: click Cancel first and use ↓ Export to save your work.'
       );
       if (!ok) return;
+      MusicPlayer.unload();   // free blob URL, clear waveform & filename
       Persistence.clearAll();
       State.p = null;
       State.init();          // re-loads from localStorage (gets default since we just cleared)
@@ -1313,17 +1308,16 @@ const UI = (() => {
 
     _on('scene-walk-dur', 'change', e => {
       const v = parseFloat(e.target.value);
-      if (v > 0) {
-        const p     = State.p;
-        const scene = p.scenes[p.currentSceneIndex];
-        if (scene) {
-          State.pushUndo();
-          scene.animDurationMs      = v * 1000;
-          p.settings.animDurationMs = v * 1000; // keep global default in sync
-          Persistence.save();
-          MusicPlayer.renderTimeline();
-        }
-      }
+      if (!(v > 0)) return;
+      const p     = State.p;
+      const scene = p.scenes[p.currentSceneIndex];
+      if (!scene) return;
+      const newMs = v * 1000;
+      if (scene.animDurationMs === newMs) return;
+      State.pushUndo();
+      scene.animDurationMs = newMs;
+      Persistence.save();
+      MusicPlayer.renderTimeline();
     });
 
     _on('scene-start-time', 'change', e => {
@@ -1335,8 +1329,10 @@ const UI = (() => {
       if (!scene || idx === 0) return; // Scene 1 always at 0
       // Clamp: must be > previous scene's startTime
       const minT = p.scenes[idx - 1]?.startTime ?? 0;
-      scene.startTime = Math.max(minT + 0.1, v);
+      const clamped = Math.max(minT + 0.1, v);
+      if (clamped === scene.startTime) return;
       State.pushUndo();
+      scene.startTime = clamped;
       Persistence.save();
       _syncStageInputs();
       MusicPlayer.renderTimeline();
@@ -1590,6 +1586,18 @@ const UI = (() => {
     MusicPlayer.renderTimeline();
   }
 
+  /* Lightweight sync for music-driven scene changes — only touches widgets
+     that depend on the current scene index. Avoids rebuilding the performer
+     list / scene marker DOM every transition (which would steal focus and
+     cause flicker during playback). */
+  function syncCurrentScene() {
+    const sel = document.getElementById('scene-select');
+    if (sel) sel.value = State.p.currentSceneIndex;
+    syncSceneNote();
+    _syncStageInputs();
+    syncSelectedPos();
+  }
+
   /* ─────── PRIVATE SYNC ─────── */
   function _syncSelectedSection() {
     const sec = document.getElementById('selected-section');
@@ -1638,7 +1646,7 @@ const UI = (() => {
 
   return {
     init,
-    syncAll, syncSceneSelect, syncPerformerList, syncSceneNote, syncZoomLabel, syncSelectedPos,
+    syncAll, syncCurrentScene, syncSceneSelect, syncPerformerList, syncSceneNote, syncZoomLabel, syncSelectedPos,
     selectPerformer,
     get selectedId() { return _selId; },
   };
@@ -1696,11 +1704,12 @@ const NotesPanel = (() => {
    MUSIC PLAYER  — load MP3, play/pause/seek, sync timeline
 ============================================================ */
 const MusicPlayer = (() => {
-  let _audio    = null;
-  let _file     = null;   // original File reference (needed for ZIP export)
-  let _rafId    = null;
-  let _peaks    = null;   // Float32Array of downsampled peak amplitudes
-  let _waveRo   = null;   // ResizeObserver for canvas redraws
+  let _audio       = null;
+  let _file        = null;  // original File reference (needed for ZIP export)
+  let _rafId       = null;
+  let _peaks       = null;  // Float32Array of downsampled peak amplitudes
+  let _waveRo      = null;  // ResizeObserver for canvas redraws
+  let _decodeToken = 0;     // monotonically incremented; used to discard stale decodes
 
   function init() {
     _audio = document.getElementById('music-audio');
@@ -1742,12 +1751,35 @@ const MusicPlayer = (() => {
     _decodeWaveform(file);
   }
 
+  function unload() {
+    if (!_audio) return;
+    if (!_audio.paused) _audio.pause();
+    cancelAnimationFrame(_rafId);
+    if (_audio.src && _audio.src.startsWith('blob:')) URL.revokeObjectURL(_audio.src);
+    _audio.removeAttribute('src');
+    try { _audio.load(); } catch (_) {}
+    _file  = null;
+    _peaks = null;
+    _decodeToken++; // invalidate any in-flight decode
+    const fnEl   = document.getElementById('music-filename');
+    const playEl = document.getElementById('btn-music-play');
+    const timeEl = document.getElementById('music-time');
+    if (fnEl)   fnEl.textContent   = 'No music loaded';
+    if (playEl) { playEl.textContent = '▶'; playEl.disabled = true; }
+    if (timeEl) timeEl.textContent = '0:00 / 0:00';
+    _drawWaveform();
+    renderTimeline();
+  }
+
   async function _decodeWaveform(file) {
+    const myToken = ++_decodeToken;
     try {
       const arrayBuf  = await file.arrayBuffer();
+      if (myToken !== _decodeToken) return; // a newer load superseded us
       const actx      = new (window.AudioContext || window.webkitAudioContext)();
       const audioBuf  = await actx.decodeAudioData(arrayBuf);
       actx.close();   // free resources immediately after decoding
+      if (myToken !== _decodeToken) return;
 
       // Use the first channel; downsample to a fixed resolution
       const raw       = audioBuf.getChannelData(0);
@@ -1763,6 +1795,7 @@ const MusicPlayer = (() => {
         }
         peaks[i] = max;
       }
+      if (myToken !== _decodeToken) return;
       _peaks = peaks;
       _drawWaveform();
     } catch (e) {
@@ -1810,7 +1843,7 @@ const MusicPlayer = (() => {
     const p      = State.p;
     // If multiple scenes all sit at startTime=0, distribute them evenly
     const needsDistrib = p.scenes.length > 1 &&
-      p.scenes.every((s, i) => i === 0 ? s.startTime === 0 : s.startTime === 0);
+      p.scenes.every(s => s.startTime === 0);
     if (needsDistrib) {
       State.pushUndo();
       const slot = dur / p.scenes.length;
@@ -1826,13 +1859,26 @@ const MusicPlayer = (() => {
 
   function togglePlay() {
     if (!_audio.src) return;
+    const btn = document.getElementById('btn-music-play');
     if (_audio.paused) {
-      _audio.play();
-      document.getElementById('btn-music-play').textContent = '⏸';
-      _startRaf();
+      // play() returns a Promise that may reject under autoplay policies;
+      // only flip the UI to "playing" once it actually resolves.
+      const result = _audio.play();
+      if (result && typeof result.then === 'function') {
+        result.then(() => {
+          btn.textContent = '⏸';
+          _startRaf();
+        }).catch(err => {
+          console.warn('Audio play() rejected:', err);
+          btn.textContent = '▶';
+        });
+      } else {
+        btn.textContent = '⏸';
+        _startRaf();
+      }
     } else {
       _audio.pause();
-      document.getElementById('btn-music-play').textContent = '▶';
+      btn.textContent = '▶';
       cancelAnimationFrame(_rafId);
     }
   }
@@ -1889,7 +1935,7 @@ const MusicPlayer = (() => {
     const prevIdx = p.currentSceneIndex;
     if (idx !== prevIdx) {
       p.currentSceneIndex = idx;
-      UI.syncAll(); // update scene selector, notes label, timing fields
+      UI.syncCurrentScene(); // light-weight: scene selector, notes, timing, selected pos
     }
 
     // Calculate how far into this scene's transition we are
@@ -1976,7 +2022,7 @@ const MusicPlayer = (() => {
   }
 
   return {
-    init, load, seekTo, renderTimeline, togglePlay,
+    init, load, unload, seekTo, renderTimeline, togglePlay,
     get file()  { return _file; },
     get audio() { return _audio; },
   };
@@ -2010,9 +2056,12 @@ const ProjectBundle = (() => {
       zip.file('music' + ext, musicFile);
     }
 
-    // background image — convert dataURL → Blob
+    // background image — convert dataURL → Blob, preserving the original format
     if (bg) {
-      zip.file('background.png', _dataURLToBlob(bg));
+      const mime = bg.match(/^data:([^;]+);/)?.[1] ?? 'image/png';
+      const sub  = mime.split('/')[1] ?? 'png';
+      const ext  = sub === 'jpeg' ? 'jpg' : sub;
+      zip.file('background.' + ext, _dataURLToBlob(bg));
     }
 
     const blob = await zip.generateAsync({ type: 'blob',
@@ -2058,8 +2107,10 @@ const ProjectBundle = (() => {
     // Migrate defaults
     _migrate(parsed);
 
-    // Background image
-    const bgEntry = zip.file('background.png') || zip.file('background.jpg');
+    // Background image — accept any common bitmap format
+    const bgEntry = Object.values(zip.files).find(f =>
+      !f.dir && /^background\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name)
+    );
     if (bgEntry) {
       const bgBlob = await bgEntry.async('blob');
       parsed.backgroundImage = await _blobToDataURL(bgBlob);
@@ -2071,17 +2122,21 @@ const ProjectBundle = (() => {
     const musicEntry = Object.values(zip.files).find(f =>
       !f.dir && /\.(mp3|ogg|wav|aac|m4a|flac)$/i.test(f.name)
     );
+    let musicFile = null;
     if (musicEntry) {
       const musicBlob = await musicEntry.async('blob');
-      const musicFile = new File([musicBlob], musicEntry.name, { type: 'audio/mpeg' });
-      MusicPlayer.load(musicFile);
+      musicFile = new File([musicBlob], musicEntry.name, { type: _audioMime(musicEntry.name) });
     }
 
+    // Replace project state BEFORE loading music, so the async
+    // `loadedmetadata` handler reads the imported scenes (not the old ones).
     State.pushUndo();
     State.p = parsed;
     Persistence.save();
     Transform.fitToWindow();
     UI.syncAll();
+
+    if (musicFile) MusicPlayer.load(musicFile);
 
     // Show success toast
     const banner = document.createElement('div');
@@ -2090,6 +2145,15 @@ const ProjectBundle = (() => {
                          (musicEntry ? '，含音乐' : '');
     document.getElementById('stage-area').appendChild(banner);
     setTimeout(() => banner.remove(), 3000);
+  }
+
+  const _AUDIO_MIME = {
+    mp3: 'audio/mpeg', ogg: 'audio/ogg',  wav: 'audio/wav',
+    m4a: 'audio/mp4',  aac: 'audio/aac',  flac: 'audio/flac',
+  };
+  function _audioMime(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    return _AUDIO_MIME[ext] ?? 'audio/mpeg';
   }
 
   function _migrate(parsed) {

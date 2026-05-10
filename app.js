@@ -1180,6 +1180,23 @@ const UI = (() => {
     _on('btn-undo', 'click', () => State.undo());
     _on('btn-redo', 'click', () => State.redo());
 
+    _on('btn-new-project', 'click', () => {
+      if (Animator.isPlaying) return;
+      const ok = confirm(
+        '新建项目 / New Project\n\n' +
+        '这将清除所有演员和场景数据，无法撤销。\n' +
+        'This will delete all performers and scenes. This cannot be undone.\n\n' +
+        '建议先点"取消"，用 ↓ Export 保存当前项目。\n' +
+        'Tip: click Cancel first and use ↓ Export to save your work.'
+      );
+      if (!ok) return;
+      Persistence.clearAll();
+      State.p = null;
+      State.init();          // re-loads from localStorage (gets default since we just cleared)
+      Transform.fitToWindow();
+      UI.syncAll();
+    });
+
     _on('btn-export-json', 'click', () => ProjectIO.exportJSON());
     _on('btn-import-json', 'click', () => document.getElementById('json-file-input').click());
     _on('json-file-input', 'change', e => {

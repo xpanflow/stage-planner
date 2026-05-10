@@ -1689,6 +1689,8 @@ const MusicPlayer = (() => {
   let _audio    = null;
   let _file     = null;   // original File reference (needed for ZIP export)
   let _rafId    = null;
+  let _peaks    = null;   // Float32Array of downsampled peak amplitudes
+  let _waveRo   = null;   // ResizeObserver for canvas redraws
 
   function init() {
     _audio = document.getElementById('music-audio');
@@ -1706,6 +1708,11 @@ const MusicPlayer = (() => {
 
     const tl = document.getElementById('music-timeline');
     tl.addEventListener('pointerdown', _onTimelineDown);
+
+    // Redraw waveform whenever the track changes size
+    const canvas = document.getElementById('music-waveform');
+    _waveRo = new ResizeObserver(() => _drawWaveform());
+    _waveRo.observe(tl);
   }
 
   function load(file) {
@@ -1718,6 +1725,74 @@ const MusicPlayer = (() => {
     _audio.addEventListener('loadedmetadata', () => {
       _onMetadataLoaded();
     }, { once: true });
+
+    // Decode full PCM for waveform (async, does not block playback)
+    _peaks = null;
+    _drawWaveform(); // clear old waveform immediately
+    _decodeWaveform(file);
+  }
+
+  async function _decodeWaveform(file) {
+    try {
+      const arrayBuf  = await file.arrayBuffer();
+      const actx      = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuf  = await actx.decodeAudioData(arrayBuf);
+      actx.close();   // free resources immediately after decoding
+
+      // Use the first channel; downsample to a fixed resolution
+      const raw       = audioBuf.getChannelData(0);
+      const buckets   = 800; // ~1 bucket per ~pixel at typical widths
+      const blockSize = Math.floor(raw.length / buckets);
+      const peaks     = new Float32Array(buckets);
+      for (let i = 0; i < buckets; i++) {
+        let max = 0;
+        const off = i * blockSize;
+        for (let j = 0; j < blockSize; j++) {
+          const v = Math.abs(raw[off + j]);
+          if (v > max) max = v;
+        }
+        peaks[i] = max;
+      }
+      _peaks = peaks;
+      _drawWaveform();
+    } catch (e) {
+      console.warn('Waveform decode failed:', e);
+    }
+  }
+
+  function _drawWaveform() {
+    const canvas = document.getElementById('music-waveform');
+    if (!canvas) return;
+    const tl = document.getElementById('music-timeline');
+    // Sync canvas pixel dimensions to its CSS dimensions
+    const W = tl.clientWidth  || canvas.offsetWidth  || 400;
+    const H = tl.clientHeight || canvas.offsetHeight || 40;
+    canvas.width  = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+
+    if (!_peaks || !_peaks.length) return;
+
+    const mid     = H / 2;
+    const buckets = _peaks.length;
+
+    // Filled waveform bars (accent color, semi-transparent)
+    ctx.fillStyle = 'rgba(74,158,255,0.45)';
+    for (let i = 0; i < buckets; i++) {
+      const x    = (i / buckets) * W;
+      const barW = Math.max(1, W / buckets - 0.5);
+      const barH = _peaks[i] * mid * 0.92;
+      ctx.fillRect(x, mid - barH, barW, barH * 2);
+    }
+
+    // Subtle center line
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(W, mid);
+    ctx.stroke();
   }
 
   function _onMetadataLoaded() {
@@ -1795,15 +1870,49 @@ const MusicPlayer = (() => {
   }
 
   function _syncSceneFromTime(t) {
-    const scenes = State.p.scenes;
+    const p      = State.p;
+    const scenes = p.scenes;
+
+    // Find which scene block t falls in
     let idx = 0;
     for (let i = scenes.length - 1; i >= 0; i--) {
       if (t >= scenes[i].startTime) { idx = i; break; }
     }
-    if (idx !== State.p.currentSceneIndex) {
-      State.p.currentSceneIndex = idx;
-      Renderer.render();
-      UI.syncAll();
+
+    const prevIdx = p.currentSceneIndex;
+    if (idx !== prevIdx) {
+      p.currentSceneIndex = idx;
+      UI.syncAll(); // update scene selector, notes label, timing fields
+    }
+
+    // Calculate how far into this scene's transition we are
+    const scene    = scenes[idx];
+    const offset   = t - scene.startTime;          // seconds since scene[idx] started
+    const animSec  = (scene.animDurationMs ?? p.settings.animDurationMs) / 1000;
+
+    if (idx > 0 && offset < animSec) {
+      // --- In-transition: lerp from scene[idx-1] to scene[idx] ---
+      const lerpT  = easeInOut(clamp(offset / animSec, 0, 1));
+      const fromPos = scenes[idx - 1].positions;
+      const toPos   = scene.positions;
+      const interp  = {};
+      for (const perf of p.performers) {
+        const fr = fromPos[perf.id];
+        const to = toPos[perf.id];
+        if (fr && to) {
+          interp[perf.id] = {
+            x: lerp(fr.x, to.x, lerpT),
+            y: lerp(fr.y, to.y, lerpT),
+            visible: true,
+          };
+        } else if (to) {
+          interp[perf.id] = { ...to };
+        }
+      }
+      Renderer.renderPerformers(interp);
+    } else {
+      // --- Static: show current scene positions ---
+      Renderer.renderPerformers();
     }
   }
 

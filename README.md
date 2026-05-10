@@ -62,6 +62,24 @@ Or open the **[live demo on GitHub Pages](https://xpanflow.github.io/stage-forma
 8. Press **▶ Play** to preview the animated transition
 9. **Export JSON** to save the project; **Export PNG** for each scene as needed
 
+## Read-Only Preview Sharing
+
+Share a project with anyone as a view-only link — no account required.
+
+**How it works:**
+
+1. Export your project with **↓ Export** → saves a `.json` file (background image not included)
+2. Upload the JSON to a publicly accessible URL (e.g. Cloudflare R2 public bucket, GitHub Gist raw, etc.)
+3. Append `?load=<json-url>` to the live demo URL and share it:
+
+```
+https://xpanflow.github.io/stage-formation/?load=https://pub-xxx.r2.dev/projects/my-show.json
+```
+
+The recipient opens the link, the project loads automatically in **preview mode** (read-only, local storage is not overwritten). They can optionally click **"Save locally"** to import it into their own workspace.
+
+> **CORS note:** the JSON host must allow `GET` requests from `https://xpanflow.github.io`. For Cloudflare R2, add an `AllowedOrigins` CORS rule to the bucket.
+
 ## GitHub Pages Deployment
 
 Push the repository to GitHub and enable Pages from the `main` branch root. No build step required.

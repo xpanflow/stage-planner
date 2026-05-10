@@ -1586,9 +1586,111 @@ const NotesPanel = (() => {
 })();
 
 /* ============================================================
+   SHARE LOADER  — ?load=<url> read-only preview
+============================================================ */
+const ShareLoader = (() => {
+  let _previewMode = false;
+
+  function init() {
+    const params  = new URLSearchParams(window.location.search);
+    const loadUrl = params.get('load');
+    if (!loadUrl) return;
+
+    // Ensure the URL has a protocol (guard against missing https://)
+    const fullUrl = /^https?:\/\//i.test(loadUrl) ? loadUrl : 'https://' + loadUrl;
+    _showBanner('loading', '⏳', '正在加载共享项目… Loading shared project…');
+    _fetchAndLoad(fullUrl);
+  }
+
+  async function _fetchAndLoad(url) {
+    let data;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+      data = await resp.json();
+    } catch (e) {
+      _showBanner('error', '⚠️', `加载失败 Failed to load: ${e.message}`);
+      return;
+    }
+
+    // Basic validation
+    if (!data || !Array.isArray(data.scenes) || !data.scenes.length || !Array.isArray(data.performers)) {
+      _showBanner('error', '⚠️', '文件格式无效 Invalid project file format');
+      return;
+    }
+
+    // Migration / fill defaults (mirrors importFromFile)
+    if (!data.settings)                         data.settings = {};
+    if (data.settings.animDurationMs == null)   data.settings.animDurationMs = 3000;
+    if (data.settings.gridVisible    == null)   data.settings.gridVisible    = true;
+    if (data.settings.snapToGrid     == null)   data.settings.snapToGrid     = false;
+    if (data.settings.gridSize       == null)   data.settings.gridSize       = 1;
+    data.backgroundImage     = null;
+    data.currentSceneIndex   = clamp(data.currentSceneIndex ?? 0, 0, data.scenes.length - 1);
+    for (const s  of data.scenes)     { if (s.note   == null) s.note   = ''; }
+    for (const pf of data.performers) {
+      const ti = TYPES[pf.type] || TYPES.child;
+      if (pf.widthM  == null) pf.widthM  = ti.widthM;
+      if (pf.heightM == null) pf.heightM = ti.heightM;
+      if (!pf.type)           pf.type    = 'child';
+    }
+
+    // Load into State — do NOT call Persistence.save() so local work is untouched
+    State.p = data;
+    _previewMode = true;
+    Transform.fitToWindow();   // also renders
+    UI.syncAll();
+
+    const name = data._projectName ?? url.split('/').pop().replace(/\.json$/i, '');
+    _showBanner(
+      'preview',
+      '👁',
+      `只读预览模式 Preview · <strong>${_esc(name)}</strong> · ${data.scenes.length} 场景 scenes, ${data.performers.length} 演员 performers`,
+      [
+        { id: 'preview-save-btn',  label: '💾 保存到本地 Save locally' },
+        { id: 'preview-exit-btn',  label: '✕ 退出 Exit' },
+      ]
+    );
+
+    document.getElementById('preview-save-btn')?.addEventListener('click', () => {
+      Persistence.save();
+      _showBanner('ok', '✓', '已保存到本地 Saved to local storage — <a href="?" style="color:inherit;text-decoration:underline">退出预览 Exit preview →</a>');
+      _previewMode = false;
+    });
+    document.getElementById('preview-exit-btn')?.addEventListener('click', () => {
+      window.location.href = window.location.pathname;
+    });
+  }
+
+  function _esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function _showBanner(type, icon, html, actions = []) {
+    const el = document.getElementById('share-banner');
+    if (!el) return;
+    el.className = `banner-${type}`;
+    el.innerHTML =
+      `<span class="banner-icon">${icon}</span>` +
+      `<span class="banner-text">${html}</span>` +
+      (actions.length
+        ? `<span class="banner-actions">${actions.map(a =>
+            `<button id="${a.id}" class="${a.id.replace('-btn','')}-btn">${a.label}</button>`
+          ).join('')}</span>`
+        : '');
+  }
+
+  return {
+    init,
+    get isPreview() { return _previewMode; },
+  };
+})();
+
+/* ============================================================
    BOOTSTRAP
 ============================================================ */
 document.addEventListener('DOMContentLoaded', () => {
   UI.init();
   NotesPanel.init();
+  ShareLoader.init();
 });

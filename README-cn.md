@@ -77,6 +77,24 @@ python3 -m http.server 8080
 └──────────────┴─────────────────────────┴───────────────────┘
 ```
 
+## 只读预览分享
+
+将项目以只读链接分享给任何人，无需账号。
+
+**操作流程：**
+
+1. 点击工具栏 **↓ Export** 导出项目为 `.json` 文件（不含背景图）
+2. 将 JSON 文件上传至公开可访问的 URL（如 Cloudflare R2 公开 Bucket、GitHub Gist raw 等）
+3. 将 `?load=<json地址>` 拼接到在线演示链接后，发送给对方：
+
+```
+https://xpanflow.github.io/stage-formation/?load=https://pub-xxx.r2.dev/projects/my-show.json
+```
+
+对方打开链接后，项目自动加载，进入**只读预览模式**（不会覆盖本地存储）。可选择点击 **"保存到本地"** 将其导入自己的工作区。
+
+> **CORS 说明：** JSON 文件的托管服务需允许来自 `https://xpanflow.github.io` 的 `GET` 请求。使用 Cloudflare R2 时，在 Bucket 的 CORS 设置中添加对应的 `AllowedOrigins` 规则即可。
+
 ## 部署到 GitHub Pages
 
 将仓库推送至 GitHub，在仓库设置中开启 Pages，选择 `main` 分支根目录即可。无需构建步骤。

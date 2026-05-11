@@ -55,10 +55,11 @@ const State = (() => {
       scenes: [{ id: uid(), name: 'Scene 1', positions: {}, note: '', startTime: 0, animDurationMs: 3000 }],
       currentSceneIndex: 0,
       settings: {
-        gridVisible:    true,
-        snapToGrid:     false,
-        gridSize:       1,
-        animDurationMs: 3000,
+        gridVisible:        true,
+        snapToGrid:         false,
+        gridSize:           1,
+        animDurationMs:     3000,
+        showPerformerNames: false,
       },
     };
   }
@@ -294,16 +295,17 @@ const Renderer = (() => {
         }));
       }
 
-      /* name label with text-stroke for readability */
-      const lbl = makeSVGEl('text', {
-        x: cx, y: cy + r + fs * 0.2,
-        'font-size': fs, fill: '#fff',
-        'text-anchor': 'middle', 'dominant-baseline': 'hanging',
-        'paint-order': 'stroke',
-        stroke: 'rgba(0,0,0,0.75)', 'stroke-width': fs * 0.3, 'stroke-linejoin': 'round',
-        'pointer-events': 'none',
-      }, perf.name);
-      g.appendChild(lbl);
+      if (p.settings.showPerformerNames) {
+        const lbl = makeSVGEl('text', {
+          x: cx, y: cy + r + fs * 0.2,
+          'font-size': fs, fill: '#fff',
+          'text-anchor': 'middle', 'dominant-baseline': 'hanging',
+          'paint-order': 'stroke',
+          stroke: 'rgba(0,0,0,0.75)', 'stroke-width': fs * 0.3, 'stroke-linejoin': 'round',
+          'pointer-events': 'none',
+        }, perf.name);
+        g.appendChild(lbl);
+      }
 
       layer.appendChild(g);
     }
@@ -791,6 +793,7 @@ const Persistence = (() => {
       if (p.settings.gridVisible    == null)  p.settings.gridVisible    = true;
       if (p.settings.snapToGrid     == null)  p.settings.snapToGrid     = false;
       if (p.settings.gridSize       == null)  p.settings.gridSize       = 1;
+      if (p.settings.showPerformerNames == null) p.settings.showPerformerNames = false;
       // Migrate per-scene timing fields
       if (Array.isArray(p.scenes)) {
         let t = 0;
@@ -889,14 +892,15 @@ const Exporter = (() => {
         }
         ctx.shadowBlur = 0;
 
-        /* name */
-        const lfs = Math.max(9, r * 0.85);
-        ctx.font        = `bold ${lfs}px sans-serif`;
-        ctx.fillStyle   = '#fff';
-        ctx.shadowColor = 'rgba(0,0,0,0.8)';
-        ctx.shadowBlur  = 4;
-        ctx.fillText(perf.name, cx, cy + r + lfs + 2);
-        ctx.shadowBlur = 0;
+        if (p.settings.showPerformerNames) {
+          const lfs = Math.max(9, r * 0.85);
+          ctx.font        = `bold ${lfs}px sans-serif`;
+          ctx.fillStyle   = '#fff';
+          ctx.shadowColor = 'rgba(0,0,0,0.8)';
+          ctx.shadowBlur  = 4;
+          ctx.fillText(perf.name, cx, cy + r + lfs + 2);
+          ctx.shadowBlur = 0;
+        }
       }
 
       /* stage border */
@@ -1039,6 +1043,7 @@ const ProjectIO = (() => {
       if (parsed.settings.gridVisible    == null) parsed.settings.gridVisible    = true;
       if (parsed.settings.snapToGrid     == null) parsed.settings.snapToGrid     = false;
       if (parsed.settings.gridSize       == null) parsed.settings.gridSize       = 1;
+      if (parsed.settings.showPerformerNames == null) parsed.settings.showPerformerNames = false;
       parsed.backgroundImage = null;    // never imported
       parsed.currentSceneIndex = clamp(parsed.currentSceneIndex ?? 0, 0, parsed.scenes.length - 1);
 
@@ -1328,6 +1333,12 @@ const UI = (() => {
         Transform.fitToWindow();
         Persistence.save();
       }
+    });
+
+    _on('show-performer-names', 'change', e => {
+      State.p.settings.showPerformerNames = e.target.checked;
+      Renderer.renderPerformers();
+      Persistence.save();
     });
 
     _on('btn-upload-bg', 'click', () => document.getElementById('bg-file-input').click());
@@ -1706,6 +1717,9 @@ const UI = (() => {
     const scene = p.scenes[idx];
     document.getElementById('stage-width').value = p.stageDimensions.width;
     document.getElementById('stage-depth').value = p.stageDimensions.depth;
+
+    const namesEl = document.getElementById('show-performer-names');
+    if (namesEl) namesEl.checked = !!p.settings.showPerformerNames;
 
     const stEl = document.getElementById('scene-start-time');
     stEl.value    = (scene?.startTime ?? 0).toFixed(1);
@@ -2279,6 +2293,7 @@ const ProjectBundle = (() => {
     if (parsed.settings.gridVisible    == null)   parsed.settings.gridVisible    = true;
     if (parsed.settings.snapToGrid     == null)   parsed.settings.snapToGrid     = false;
     if (parsed.settings.gridSize       == null)   parsed.settings.gridSize       = 1;
+    if (parsed.settings.showPerformerNames == null) parsed.settings.showPerformerNames = false;
     parsed.currentSceneIndex = clamp(parsed.currentSceneIndex ?? 0, 0, parsed.scenes.length - 1);
     let t = 0;
     for (const s of parsed.scenes) {
@@ -2389,6 +2404,7 @@ const ShareLoader = (() => {
     if (data.settings.gridVisible    == null)   data.settings.gridVisible    = true;
     if (data.settings.snapToGrid     == null)   data.settings.snapToGrid     = false;
     if (data.settings.gridSize       == null)   data.settings.gridSize       = 1;
+    if (data.settings.showPerformerNames == null) data.settings.showPerformerNames = false;
     data.backgroundImage     = null;
     data.currentSceneIndex   = clamp(data.currentSceneIndex ?? 0, 0, data.scenes.length - 1);
     for (const s  of data.scenes)     { if (s.note   == null) s.note   = ''; }

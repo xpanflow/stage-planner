@@ -1,6 +1,6 @@
 # Stage Formation Planner
 
-[中文版](README-cn.md) | **[▶ Live Demo](https://xpanflow.github.io/stage-formation/)**
+[中文版](README-cn.md) | **[▶ Live Demo](https://xpanflow.github.io/stage-planner/)**
 
 ![Stage Formation Planner](doc/ScreenShot.png)
 
